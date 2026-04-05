@@ -88,3 +88,7 @@ Or clone the repository directly into `~/.codex/skills/`.
 ## Important
 
 This is a deterministic smoke test, not an official Robokassa validator. If a user asks whether a site meets the latest Robokassa requirements, verify the current official Robokassa rules first and then use this checker to inspect the actual site.
+
+## License
+
+MIT
