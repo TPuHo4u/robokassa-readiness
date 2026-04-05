@@ -1,0 +1,4 @@
+interface:
+  display_name: "Robokassa Readiness"
+  short_description: "Audit moderation readiness"
+  default_prompt: "Audit a site or generated HTML for Robokassa moderation readiness, choose or adapt the checker config to the seller type and page structure, run the checker, and explain concrete gaps and fixes."
