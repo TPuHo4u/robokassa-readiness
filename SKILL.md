@@ -1,6 +1,6 @@
 ---
 name: robokassa-readiness
-description: Audit a site or generated HTML for Robokassa moderation readiness. Use whenever the user mentions Robokassa, payment moderation, payment gateway approval, or asks to check whether a public landing page is ready for accepting payments. Also trigger when the user says "проверь сайт перед подключением оплаты", "что нужно для модерации", "подготовить сайт к оплате", "робокасса модерация", or asks about missing legal pages, offer/terms/privacy compliance, or seller requisites on a landing page — even if they don't mention Robokassa by name but clearly need a payment-surface readiness check. The bundled checker ships with a strict Russian self-employed preset, but supports configuration for other seller types, page names, and checkout wording.
+description: Invoke whenever the user mentions робокасса or robokassa in any form. Invoke when the user asks to write, review, or check an оферта, политика конфиденциальности, условия возврата, or any legal/compliance page needed for selling products or services online. Invoke when checking a site or URL before connecting a payment gateway — even without naming Robokassa. Invoke for questions about ИНН, реквизиты, or seller info requirements on landing pages. Covers drafting legal documents for digital and physical products (subscriptions, bots, courses, SaaS), auditing HTML or live sites, and advising on moderation readiness. Supports ИП, ООО, самозанятый. Not for Stripe, Тинькофф, general web dev, or non-payment tasks.
 ---
 
 # Robokassa Readiness
