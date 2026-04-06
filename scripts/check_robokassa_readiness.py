@@ -3,6 +3,7 @@
 Usage:
     python3 check_robokassa_readiness.py --path data/html
     python3 check_robokassa_readiness.py --url https://example.com
+    python3 check_robokassa_readiness.py --path data/html --diff https://example.com
     python3 check_robokassa_readiness.py --config robokassa-readiness.json --url https://example.com
     python3 check_robokassa_readiness.py --print-default-config
 """
@@ -19,7 +20,12 @@ from typing import Callable, Sequence
 from urllib.request import urlopen
 
 
-CheckResult = tuple[bool, str]
+CheckResult = tuple[bool, str, str]  # (passed, message, severity)
+
+
+def _supports_color() -> bool:
+    return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+
 
 DEFAULT_INDEX_PAGE = "index.html"
 DEFAULT_ABOUT_PAGE = "about.html"
@@ -152,6 +158,7 @@ class CheckerConfig:
     seller_id_patterns: tuple[str, ...] = DEFAULT_SELLER_ID_PATTERNS
     seller_id_label: str = "seller INN"
     phone_patterns: tuple[str, ...] = DEFAULT_PHONE_PATTERNS
+    min_content_length: int = 500
 
     def __post_init__(self) -> None:
         if self.seller_name_mode not in SELLER_NAME_MODES:
@@ -286,6 +293,11 @@ class CheckerConfig:
         if phone_patterns is None:
             phone_patterns = base.phone_patterns
 
+        try:
+            min_content_length = int(raw.get("min_content_length", base.min_content_length))
+        except (ValueError, TypeError):
+            raise ValueError("min_content_length must be a number")
+
         return cls(
             index_page=index_page,
             about_page=about_page,
@@ -306,6 +318,7 @@ class CheckerConfig:
             seller_id_patterns=seller_id_patterns,
             seller_id_label=seller_id_label,
             phone_patterns=phone_patterns,
+            min_content_length=min_content_length,
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -329,6 +342,7 @@ class CheckerConfig:
             "seller_id_patterns": list(self.seller_id_patterns),
             "seller_id_label": self.seller_id_label,
             "phone_patterns": list(self.phone_patterns),
+            "min_content_length": self.min_content_length,
         }
 
 
@@ -362,24 +376,24 @@ def _read_remote(base_url: str, page: str) -> str | None:
 
 def _check_page_exists(content: str | None, page: str) -> CheckResult:
     if content and content.strip():
-        return (True, f"{page} exists")
-    return (False, f"{page} missing or empty")
+        return (True, f"{page} exists", "ok")
+    return (False, f"{page} missing or empty", "blocker")
 
 
 def _check_no_trial(content: str, page: str) -> CheckResult:
     lower = content.lower()
     if "пробный период" in lower or "бесплатный пробный период" in lower:
-        return (False, f"{page}: trial language found")
-    return (True, f"{page}: no trial language")
+        return (False, f"{page}: trial language found", "warning")
+    return (True, f"{page}: no trial language", "ok")
 
 
 def _check_tariffs(content: str, index_page: str, price_markers: Sequence[str]) -> CheckResult:
     if not price_markers:
-        return (True, f"{index_page}: tariff check skipped (no price markers configured)")
+        return (True, f"{index_page}: tariff check skipped (no price markers configured)", "ok")
     missing = [marker for marker in price_markers if marker not in content]
     if not missing:
-        return (True, f"{index_page}: configured tariffs found")
-    return (False, f"{index_page}: tariffs missing ({', '.join(missing)})")
+        return (True, f"{index_page}: configured tariffs found", "ok")
+    return (False, f"{index_page}: tariffs missing ({', '.join(missing)})", "warning")
 
 
 def _extract_first_match(content: str, patterns: Sequence[str]) -> str | None:
@@ -400,15 +414,15 @@ def _check_seller_name(
     mode: str,
 ) -> CheckResult:
     if mode == "skip":
-        return (True, f"{page}: seller name check skipped")
+        return (True, f"{page}: seller name check skipped", "ok")
     value = _extract_first_match(content, patterns)
     if not value or value in ("\u2014", "-", ""):
-        return (False, f"{page}: seller name not found, placeholder, or abbreviated")
+        return (False, f"{page}: seller name not found, placeholder, or abbreviated", "blocker")
     if mode == "any_non_placeholder":
-        return (True, f"{page}: seller name found")
+        return (True, f"{page}: seller name found", "ok")
     if _looks_like_full_legal_name(value):
-        return (True, f"{page}: seller name found")
-    return (False, f"{page}: seller name not found, placeholder, or abbreviated")
+        return (True, f"{page}: seller name found", "ok")
+    return (False, f"{page}: seller name not found, placeholder, or abbreviated", "blocker")
 
 
 def _check_seller_identifier(
@@ -418,30 +432,30 @@ def _check_seller_identifier(
     label: str,
 ) -> CheckResult:
     if not patterns:
-        return (True, f"{page}: {label} check skipped")
+        return (True, f"{page}: {label} check skipped", "ok")
     if any(re.search(pattern, content) for pattern in patterns):
-        return (True, f"{page}: {label} found")
-    return (False, f"{page}: {label} not found")
+        return (True, f"{page}: {label} found", "ok")
+    return (False, f"{page}: {label} not found", "blocker")
 
 
 def _check_email(content: str, page: str) -> CheckResult:
     if re.search(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", content):
-        return (True, f"{page}: support email found")
-    return (False, f"{page}: support email not found")
+        return (True, f"{page}: support email found", "ok")
+    return (False, f"{page}: support email not found", "blocker")
 
 
 def _check_phone(content: str, page: str, patterns: Sequence[str]) -> CheckResult:
     if not patterns:
-        return (True, f"{page}: phone check skipped")
+        return (True, f"{page}: phone check skipped", "ok")
     if any(re.search(pattern, content) for pattern in patterns):
-        return (True, f"{page}: phone number found")
-    return (False, f"{page}: phone number not found")
+        return (True, f"{page}: phone number found", "ok")
+    return (False, f"{page}: phone number not found", "blocker")
 
 
 def _check_refund(content: str, offer_page: str) -> CheckResult:
     if "возврат" in content.lower():
-        return (True, f"{offer_page}: refund wording found")
-    return (False, f"{offer_page}: refund wording not found")
+        return (True, f"{offer_page}: refund wording found", "ok")
+    return (False, f"{offer_page}: refund wording not found", "blocker")
 
 
 def _check_keywords_any(
@@ -452,11 +466,11 @@ def _check_keywords_any(
     fail_message: str,
 ) -> CheckResult:
     if not keywords:
-        return (True, f"{page}: {ok_message} skipped")
+        return (True, f"{page}: {ok_message} skipped", "ok")
     lower = content.lower()
     if any(keyword.lower() in lower for keyword in keywords):
-        return (True, f"{page}: {ok_message}")
-    return (False, f"{page}: {fail_message}")
+        return (True, f"{page}: {ok_message}", "ok")
+    return (False, f"{page}: {fail_message}", "warning")
 
 
 def _check_keywords_all(
@@ -467,11 +481,11 @@ def _check_keywords_all(
     fail_message: str,
 ) -> CheckResult:
     if not keywords:
-        return (True, f"{page}: {ok_message} skipped")
+        return (True, f"{page}: {ok_message} skipped", "ok")
     lower = content.lower()
     if all(keyword.lower() in lower for keyword in keywords):
-        return (True, f"{page}: {ok_message}")
-    return (False, f"{page}: {fail_message}")
+        return (True, f"{page}: {ok_message}", "ok")
+    return (False, f"{page}: {fail_message}", "warning")
 
 
 def _find_href_targets(content: str) -> set[str]:
@@ -480,30 +494,146 @@ def _find_href_targets(content: str) -> set[str]:
 
 def _check_legal_links_on_index(content: str, config: CheckerConfig) -> CheckResult:
     if not config.required_link_targets_on_index:
-        return (True, f"{config.index_page}: legal link check skipped")
+        return (True, f"{config.index_page}: legal link check skipped", "ok")
     hrefs = _find_href_targets(content)
     missing = [
         target for target in config.required_link_targets_on_index
         if not any(href == target or href.endswith("/" + target) for href in hrefs)
     ]
     if not missing:
-        return (True, f"{config.index_page}: legal page links found")
+        return (True, f"{config.index_page}: legal page links found", "ok")
     missing_names = [target.removesuffix(".html") for target in missing]
-    return (False, f"{config.index_page}: legal links missing ({', '.join(missing_names)})")
+    return (False, f"{config.index_page}: legal links missing ({', '.join(missing_names)})", "blocker")
+
+
+def _check_min_content_length(content: str, page: str, min_chars: int = 500) -> CheckResult:
+    content_length = len(content.strip())
+    if content_length < min_chars:
+        return (False, f"{page}: only {content_length} chars — likely a stub page", "warning")
+    return (True, f"{page}: content length sufficient ({content_length} chars)", "ok")
+
+
+def _check_offer_structure(content: str, offer_page: str) -> list[CheckResult]:
+    results: list[CheckResult] = []
+    lower = content.lower()
+
+    # Check for "публичная оферта"
+    if "публичн" in lower and "оферт" in lower:
+        results.append((True, f"{offer_page}: public offer identification found", "ok"))
+    else:
+        results.append((False, f"{offer_page}: public offer identification not found", "blocker"))
+
+    # Check for subject section
+    if "предмет" in lower:
+        results.append((True, f"{offer_page}: subject section found", "ok"))
+    else:
+        results.append((False, f"{offer_page}: subject section not found", "blocker"))
+
+    # Check for refund section (existing check)
+    if "возврат" in lower:
+        results.append((True, f"{offer_page}: refund wording found", "ok"))
+    else:
+        results.append((False, f"{offer_page}: refund wording not found", "blocker"))
+
+    # Check for personal data handling
+    if "персональн" in lower:
+        results.append((True, f"{offer_page}: personal data handling section found", "ok"))
+    else:
+        results.append((False, f"{offer_page}: personal data handling section not found", "blocker"))
+
+    # Check for executor details
+    if "реквизит" in lower or "исполнител" in lower:
+        results.append((True, f"{offer_page}: executor details section found", "ok"))
+    else:
+        results.append((False, f"{offer_page}: executor details section not found", "blocker"))
+
+    return results
+
+
+def _check_cross_page_consistency(
+    pages: dict[str, str | None],
+    config: CheckerConfig,
+) -> list[CheckResult]:
+    results: list[CheckResult] = []
+
+    # Extract seller names
+    seller_names: dict[str, str] = {}
+
+    # Extract from index page
+    index_content = pages.get(config.index_page)
+    if index_content:
+        index_name = _extract_first_match(index_content, config.index_seller_name_patterns)
+        if index_name:
+            seller_names[config.index_page] = index_name
+
+    # Extract from offer page
+    offer_content = pages.get(config.offer_page)
+    if offer_content:
+        offer_name = _extract_first_match(offer_content, config.offer_seller_name_patterns)
+        if offer_name:
+            seller_names[config.offer_page] = offer_name
+
+    # Check seller name consistency
+    if len(seller_names) > 1:
+        unique_names = set(seller_names.values())
+        if len(unique_names) == 1:
+            results.append((True, "seller names consistent across pages", "ok"))
+        else:
+            name_pairs = ", ".join(f"{page}='{name}'" for page, name in seller_names.items())
+            results.append((False, f"seller name mismatch: {name_pairs}", "warning"))
+    elif len(seller_names) == 1:
+        page, name = next(iter(seller_names.items()))
+        results.append((True, f"seller name found only on {page}: '{name}'", "ok"))
+    else:
+        results.append((True, "seller name consistency check skipped (no names found)", "ok"))
+
+    # Extract INNs from all pages
+    inn_values: dict[str, str] = {}
+
+    for page_name, content in pages.items():
+        if content and config.seller_id_patterns:
+            inn_match = _extract_first_match(content, config.seller_id_patterns)
+            if inn_match:
+                inn_values[page_name] = inn_match
+
+    # Check INN consistency
+    if len(inn_values) > 1:
+        unique_inns = set(inn_values.values())
+        if len(unique_inns) == 1:
+            results.append((True, f"{config.seller_id_label} consistent across pages", "ok"))
+        else:
+            inn_pairs = ", ".join(f"{page}='{inn}'" for page, inn in inn_values.items())
+            results.append((False, f"{config.seller_id_label} mismatch: {inn_pairs}", "warning"))
+    elif len(inn_values) == 1:
+        page, inn = next(iter(inn_values.items()))
+        results.append((True, f"{config.seller_id_label} found only on {page}: '{inn}'", "ok"))
+    else:
+        results.append((True, f"{config.seller_id_label} consistency check skipped (no {config.seller_id_label.lower()} found)", "ok"))
+
+    return results
 
 
 def run_checks(
     reader: Callable[[str], str | None],
     config: CheckerConfig | None = None,
+    base_url: str | None = None,
 ) -> list[CheckResult]:
     current = config or CheckerConfig()
     results: list[CheckResult] = []
+
+    # HTTPS check for remote URLs
+    if base_url is not None and not base_url.startswith("https://"):
+        results.append((False, "site uses HTTP, not HTTPS — Robokassa requires HTTPS", "blocker"))
 
     pages: dict[str, str | None] = {}
     for page in dict.fromkeys(current.required_pages):
         content = reader(page)
         pages[page] = content
         results.append(_check_page_exists(content, page))
+
+        # Add content length check for existing pages
+        if content and content.strip():
+            results.append(_check_min_content_length(content, page, current.min_content_length))
 
     index_content = pages.get(current.index_page)
     if index_content:
@@ -557,7 +687,8 @@ def run_checks(
             )
         )
         results.append(_check_email(offer_content, current.offer_page))
-        results.append(_check_refund(offer_content, current.offer_page))
+        # Replace single refund check with comprehensive offer structure check
+        results.extend(_check_offer_structure(offer_content, current.offer_page))
         results.append(
             _check_keywords_any(
                 offer_content,
@@ -572,7 +703,7 @@ def run_checks(
     if terms_content:
         results.append(_check_no_trial(terms_content, current.terms_page))
         if not current.required_link_targets_on_terms:
-            results.append((True, f"{current.terms_page}: legal link check skipped"))
+            results.append((True, f"{current.terms_page}: legal link check skipped", "ok"))
         else:
             terms_hrefs = _find_href_targets(terms_content)
             missing_terms_links = [
@@ -581,10 +712,10 @@ def run_checks(
             ]
             if not missing_terms_links:
                 joined = ", ".join(current.required_link_targets_on_terms)
-                results.append((True, f"{current.terms_page}: links to {joined}"))
+                results.append((True, f"{current.terms_page}: links to {joined}", "ok"))
             else:
                 joined = ", ".join(missing_terms_links)
-                results.append((False, f"{current.terms_page}: missing links to {joined}"))
+                results.append((False, f"{current.terms_page}: missing links to {joined}", "blocker"))
 
     about_content = pages.get(current.about_page)
     if about_content:
@@ -610,6 +741,9 @@ def run_checks(
             )
         )
 
+    # Cross-page consistency check
+    results.extend(_check_cross_page_consistency(pages, current))
+
     return results
 
 
@@ -619,38 +753,141 @@ def check_local(html_dir: str, config: CheckerConfig | None = None) -> list[Chec
 
 
 def check_remote(base_url: str, config: CheckerConfig | None = None) -> list[CheckResult]:
-    return run_checks(lambda page: _read_remote(base_url, page), config=config)
+    return run_checks(lambda page: _read_remote(base_url, page), config=config, base_url=base_url)
+
+
+def check_diff(
+    html_dir: str,
+    base_url: str,
+    config: CheckerConfig | None = None,
+) -> tuple[list[CheckResult], list[CheckResult]]:
+    """Run checks on both local and remote, return (local_results, remote_results)."""
+    local_results = check_local(html_dir, config=config)
+    remote_results = check_remote(base_url, config=config)
+    return local_results, remote_results
 
 
 def print_results(results: Sequence[CheckResult], *, as_json: bool = False) -> int:
-    passed = sum(1 for ok, _ in results if ok)
+    passed = sum(1 for ok, _, _ in results if ok)
     total = len(results)
     ready = passed == total
+
+    # Count by severity
+    blockers = sum(1 for ok, _, severity in results if not ok and severity == "blocker")
+    warnings = sum(1 for ok, _, severity in results if not ok and severity == "warning")
 
     if as_json:
         output = {
             "passed": passed,
             "total": total,
+            "blockers": blockers,
+            "warnings": warnings,
             "ready": ready,
-            "checks": [{"ok": ok, "message": msg} for ok, msg in results],
+            "checks": [{"ok": ok, "message": msg, "severity": severity} for ok, msg, severity in results],
         }
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 0 if ready else 1
 
+    use_color = _supports_color()
+    colors = {
+        "ok": "\033[32m" if use_color else "",
+        "blocker": "\033[31m" if use_color else "",
+        "warning": "\033[33m" if use_color else "",
+        "ready": "\033[32m" if use_color else "",
+        "not_ready": "\033[31m" if use_color else "",
+        "reset": "\033[0m" if use_color else "",
+    }
+
     print("Robokassa Readiness Check")
     print("=" * 40)
-    for ok, message in results:
-        print(f"  {'[OK]' if ok else '[FAIL]'} {message}")
+
+    # Group results by severity: blockers first, then warnings, then passed
+    sorted_results = []
+    for severity in ["blocker", "warning", "ok"]:
+        for result in results:
+            ok, message, result_severity = result
+            if not ok and result_severity == severity:
+                sorted_results.append(result)
+            elif ok and severity == "ok":
+                sorted_results.append(result)
+
+    for ok, message, severity in sorted_results:
+        if ok:
+            status_color = colors["ok"]
+            status_text = "[OK]"
+        else:
+            status_color = colors["blocker"] if severity == "blocker" else colors["warning"]
+            status_text = "[FAIL]"
+
+        print(f"  {status_color}{status_text}{colors['reset']} {message} ({severity})")
+
     print("=" * 40)
-    print(f"Result: {passed}/{total} checks passed")
-    print(f"Status: {'READY' if ready else 'NOT READY'}")
+    print(f"Blockers: {blockers} | Warnings: {warnings} | Passed: {passed}/{total}")
+
+    status_color = colors["ready"] if ready else colors["not_ready"]
+    status_text = "READY" if ready else "NOT READY"
+    print(f"Status: {status_color}{status_text}{colors['reset']}")
+
     return 0 if ready else 1
+
+
+def _normalize_diff_key(message: str) -> str:
+    """Normalize message for diff comparison — strip variable parts like char counts."""
+    return re.sub(r"content length sufficient \(\d+ chars\)", "content length sufficient", message)
+
+
+def print_diff_results(
+    local_results: list[CheckResult],
+    remote_results: list[CheckResult],
+) -> int:
+    """Print comparison between local and remote results, return 0 if identical."""
+    local_by_key = {_normalize_diff_key(r[1]): (r[0], r[1]) for r in local_results}
+    remote_by_key = {_normalize_diff_key(r[1]): (r[0], r[1]) for r in remote_results}
+
+    # Find differences
+    all_keys = set(local_by_key.keys()) | set(remote_by_key.keys())
+    differences = []
+
+    for key in sorted(all_keys):
+        local_entry = local_by_key.get(key)
+        remote_entry = remote_by_key.get(key)
+        local_status = local_entry[0] if local_entry else None
+        remote_status = remote_entry[0] if remote_entry else None
+
+        if local_status != remote_status:
+            local_text = "OK" if local_status else "FAIL" if local_status is not None else "MISSING"
+            remote_text = "OK" if remote_status else "FAIL" if remote_status is not None else "MISSING"
+            differences.append((key, local_text, remote_text))
+
+    # Calculate passed counts
+    local_passed = sum(1 for entry in local_by_key.values() if entry[0])
+    local_total = len(local_results)
+    remote_passed = sum(1 for entry in remote_by_key.values() if entry[0])
+    remote_total = len(remote_results)
+
+    same_count = len(all_keys) - len(differences)
+
+    print("Robokassa Readiness Diff: local vs remote")
+    print("=" * 40)
+
+    for msg, local_text, remote_text in differences:
+        print(f"  [DIFF] {msg}: local={local_text}, remote={remote_text}")
+
+    if same_count > 0:
+        print(f"  [SAME] {same_count} checks match")
+
+    print("=" * 40)
+    print(f"Local:  {local_passed}/{local_total} passed")
+    print(f"Remote: {remote_passed}/{remote_total} passed")
+
+    return 0 if len(differences) == 0 else 1
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Robokassa readiness checker")
     parser.add_argument("--path", help="Local HTML directory to check")
     parser.add_argument("--url", help="Base URL to check (for example https://example.com)")
+    parser.add_argument("--diff", metavar="URL", help="Compare local --path against a live URL")
     parser.add_argument("--config", help="Optional JSON config file")
     parser.add_argument(
         "--print-default-config",
@@ -668,8 +905,63 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(CheckerConfig().to_dict(), ensure_ascii=False, indent=2))
         return 0
 
-    if bool(args.path) == bool(args.url):
-        parser.error("exactly one of --path or --url is required unless --print-default-config is used")
+    # Handle diff mode
+    if args.diff:
+        if args.url:
+            parser.error("cannot use --diff with --url")
+        if not args.path:
+            parser.error("--diff requires --path")
+
+        try:
+            config = load_config(args.config)
+        except Exception as exc:
+            parser.error(f"invalid --config: {exc}")
+
+        local_results, remote_results = check_diff(args.path, args.diff, config=config)
+
+        if args.json:
+            local_passed = sum(1 for r in local_results if r[0])
+            remote_passed = sum(1 for r in remote_results if r[0])
+
+            local_by_key = {_normalize_diff_key(r[1]): r[0] for r in local_results}
+            remote_by_key = {_normalize_diff_key(r[1]): r[0] for r in remote_results}
+            all_keys = set(local_by_key.keys()) | set(remote_by_key.keys())
+
+            differences = []
+            for key in sorted(all_keys):
+                l_status = local_by_key.get(key)
+                r_status = remote_by_key.get(key)
+                if l_status != r_status:
+                    differences.append({
+                        "message": key,
+                        "local": l_status,
+                        "remote": r_status,
+                    })
+
+            output = {
+                "local": {
+                    "passed": local_passed,
+                    "total": len(local_results),
+                    "checks": [{"ok": r[0], "message": r[1], "severity": r[2]} for r in local_results],
+                },
+                "remote": {
+                    "passed": remote_passed,
+                    "total": len(remote_results),
+                    "checks": [{"ok": r[0], "message": r[1], "severity": r[2]} for r in remote_results],
+                },
+                "differences": differences,
+            }
+            print(json.dumps(output, ensure_ascii=False, indent=2))
+            return 0 if len(differences) == 0 else 1
+        else:
+            return print_diff_results(local_results, remote_results)
+
+    # Handle regular modes
+    if not args.path and not args.url:
+        parser.error("exactly one of --path or --url is required unless --print-default-config or --diff is used")
+
+    if args.path and args.url:
+        parser.error("cannot use both --path and --url")
 
     try:
         config = load_config(args.config)

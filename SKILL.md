@@ -55,6 +55,7 @@ Use `scripts/check_robokassa_readiness.py` as the canonical implementation. It s
 
 - `--path` for local generated HTML
 - `--url` for a live public site
+- `--diff URL` for comparing local HTML against a live site (requires `--path`)
 - `--config` for JSON overrides
 - `--json` for machine-readable output (CI pipelines, other skills)
 - `--print-default-config` to bootstrap reuse in another project
@@ -73,15 +74,19 @@ Read `references/configuration.md` only when the default assumptions do not fit 
 
 ## Interpretation Rules
 
-- Treat missing pages, missing requisites, abbreviated seller name, and missing offer/terms/privacy links as moderation blockers.
-- Treat delivery wording and checkout-flow wording as clarity blockers: they often matter during manual review even when the code or payment flow already works.
-- Treat this skill as a deterministic smoke test. Do not present it as Robokassa's official approval mechanism.
-- If a project uses non-self-employed seller data, make the config explicit in the answer so future reviewers can see why the checker passed.
+The checker assigns severity automatically:
+
+- **blocker** — must fix before moderation: missing pages, missing requisites, abbreviated seller name, missing legal links, no refund wording, HTTP (not HTTPS), missing offer structure sections.
+- **warning** — should clarify for manual review: delivery wording, checkout-flow wording, trial language, short page content, tariff markers.
+- **ok** — check passed.
+
+Treat this skill as a deterministic smoke test. Do not present it as Robokassa's official approval mechanism.
+If a project uses non-self-employed seller data, make the config explicit in the answer so future reviewers can see why the checker passed.
 
 ## Output
 
-When reporting results, group findings into:
+Results are grouped by severity (blockers first, then warnings, then passed). Terminal output is color-coded (red for blockers, yellow for warnings, green for OK) when connected to a TTY.
 
-- `must fix before moderation`
-- `should clarify for manual review`
-- `already compliant`
+`--json` output includes `blockers` and `warnings` counts plus `severity` per check.
+
+`--diff` output shows only differences between local and remote, ignoring natural variation like content length.

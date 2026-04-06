@@ -46,6 +46,8 @@ Use a JSON config file when seller type, page names, legal-link structure, price
   Human-readable label used in the result messages.
 - `phone_patterns`
   Regex patterns for contact phone detection. Set `[]` to skip phone validation.
+- `min_content_length`
+  Minimum character count for a page to not be flagged as a stub. Default: `500`. Set `0` to skip.
 
 ## Example: Telegram Bot Checkout
 
