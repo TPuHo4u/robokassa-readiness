@@ -1,6 +1,6 @@
 ---
 name: robokassa-readiness
-description: Audit a site or generated HTML for Robokassa moderation readiness. Use when asked to check whether a public landing page is ready for Robokassa, compare local generated HTML with a live site, explain missing legal or pricing blocks, or run a repeatable readiness smoke test before submitting a site for moderation. The bundled checker ships with a strict Russian self-employed preset, but supports configuration for other seller types, page names, and checkout wording.
+description: Audit a site or generated HTML for Robokassa moderation readiness. Use whenever the user mentions Robokassa, payment moderation, payment gateway approval, or asks to check whether a public landing page is ready for accepting payments. Also trigger when the user says "проверь сайт перед подключением оплаты", "что нужно для модерации", "подготовить сайт к оплате", "робокасса модерация", or asks about missing legal pages, offer/terms/privacy compliance, or seller requisites on a landing page — even if they don't mention Robokassa by name but clearly need a payment-surface readiness check. The bundled checker ships with a strict Russian self-employed preset, but supports configuration for other seller types, page names, and checkout wording.
 ---
 
 # Robokassa Readiness
@@ -56,6 +56,7 @@ Use `scripts/check_robokassa_readiness.py` as the canonical implementation. It s
 - `--path` for local generated HTML
 - `--url` for a live public site
 - `--config` for JSON overrides
+- `--json` for machine-readable output (CI pipelines, other skills)
 - `--print-default-config` to bootstrap reuse in another project
 
 The highest-value overrides are:

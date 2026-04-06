@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
+import urllib.error
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
@@ -351,7 +353,10 @@ def _read_remote(base_url: str, page: str) -> str | None:
             if response.status != 200:
                 return None
             return response.read().decode("utf-8")
-    except Exception:
+    except urllib.error.HTTPError:
+        return None
+    except Exception as exc:
+        print(f"  [WARN] could not fetch {url}: {exc}", file=sys.stderr)
         return None
 
 
@@ -469,10 +474,18 @@ def _check_keywords_all(
     return (False, f"{page}: {fail_message}")
 
 
+def _find_href_targets(content: str) -> set[str]:
+    return set(re.findall(r'href=["\']([^"\']+)["\']', content, re.IGNORECASE))
+
+
 def _check_legal_links_on_index(content: str, config: CheckerConfig) -> CheckResult:
     if not config.required_link_targets_on_index:
         return (True, f"{config.index_page}: legal link check skipped")
-    missing = [target for target in config.required_link_targets_on_index if target not in content]
+    hrefs = _find_href_targets(content)
+    missing = [
+        target for target in config.required_link_targets_on_index
+        if not any(href == target or href.endswith("/" + target) for href in hrefs)
+    ]
     if not missing:
         return (True, f"{config.index_page}: legal page links found")
     missing_names = [target.removesuffix(".html") for target in missing]
@@ -561,8 +574,10 @@ def run_checks(
         if not current.required_link_targets_on_terms:
             results.append((True, f"{current.terms_page}: legal link check skipped"))
         else:
+            terms_hrefs = _find_href_targets(terms_content)
             missing_terms_links = [
-                target for target in current.required_link_targets_on_terms if target not in terms_content
+                target for target in current.required_link_targets_on_terms
+                if not any(href == target or href.endswith("/" + target) for href in terms_hrefs)
             ]
             if not missing_terms_links:
                 joined = ", ".join(current.required_link_targets_on_terms)
@@ -570,6 +585,18 @@ def run_checks(
             else:
                 joined = ", ".join(missing_terms_links)
                 results.append((False, f"{current.terms_page}: missing links to {joined}"))
+
+    about_content = pages.get(current.about_page)
+    if about_content:
+        results.append(_check_email(about_content, current.about_page))
+        results.append(
+            _check_seller_identifier(
+                about_content,
+                current.about_page,
+                current.seller_id_patterns,
+                current.seller_id_label,
+            )
+        )
 
     privacy_content = pages.get(current.privacy_page)
     if privacy_content:
@@ -595,22 +622,29 @@ def check_remote(base_url: str, config: CheckerConfig | None = None) -> list[Che
     return run_checks(lambda page: _read_remote(base_url, page), config=config)
 
 
-def print_results(results: Sequence[CheckResult]) -> int:
+def print_results(results: Sequence[CheckResult], *, as_json: bool = False) -> int:
+    passed = sum(1 for ok, _ in results if ok)
+    total = len(results)
+    ready = passed == total
+
+    if as_json:
+        output = {
+            "passed": passed,
+            "total": total,
+            "ready": ready,
+            "checks": [{"ok": ok, "message": msg} for ok, msg in results],
+        }
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0 if ready else 1
+
     print("Robokassa Readiness Check")
     print("=" * 40)
-    passed = 0
-    total = len(results)
     for ok, message in results:
         print(f"  {'[OK]' if ok else '[FAIL]'} {message}")
-        if ok:
-            passed += 1
     print("=" * 40)
     print(f"Result: {passed}/{total} checks passed")
-    if passed == total:
-        print("Status: READY")
-        return 0
-    print("Status: NOT READY")
-    return 1
+    print(f"Status: {'READY' if ready else 'NOT READY'}")
+    return 0 if ready else 1
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -622,6 +656,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--print-default-config",
         action="store_true",
         help="Print the default JSON config and exit",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output results as JSON",
     )
     args = parser.parse_args(argv)
 
@@ -641,7 +680,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         results = check_local(args.path, config=config)
     else:
         results = check_remote(args.url, config=config)
-    return print_results(results)
+    return print_results(results, as_json=args.json)
 
 
 if __name__ == "__main__":
